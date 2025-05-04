@@ -6,17 +6,20 @@ import time
 import numpy as np
 from deepface import DeepFace
 from datetime import datetime
+import pickle
 
 # Configuration
 RESOLUTION = (800, 480)  # Keeping original resolution as requested
 DATASET_PATH = "cleaned_dataset"
 LOG_PATH = "log_presensi"
+EMBEDDINGS_PATH = "embeddings.pkl"  # New: Store precomputed embeddings
 MIN_ACCURACY = 0.8  # 80% confidence for face detection
-FACE_MATCH_THRESHOLD = 0.65  # Optimal threshold for Facenet
-COOLDOWN = 1  # seconds between detections
-SKIP_FRAMES = 2  # Process every nth frame for recognition
-DETECTION_PERSISTENCE = 2  # Number of frames to keep showing detection when not processing
+FACE_MATCH_THRESHOLD = 0.7  # Optimal threshold for Facenet
+COOLDOWN = 1.0  # Increased cooldown to reduce recognition attempts
+SKIP_FRAMES = 3  # Process every nth frame for recognition (increased)
+DETECTION_PERSISTENCE = 1  # Number of frames to keep showing detection when not processing
 PROCESSING_SIZE = (320, 240)  # Smaller size for processing to improve performance
+VERIFICATION_SIZE = (160, 160)  # Standard size for FaceNet inputs
 
 # Create necessary directories
 os.makedirs(DATASET_PATH, exist_ok=True)
@@ -26,6 +29,7 @@ class FaceRecognitionSystem:
     def __init__(self):
         self.dataset = {}
         self.name_mapping = {}
+        self.embeddings = {}  # New: Store precomputed face embeddings
         self.attendance_today = set()
         self.frame_queue = queue.Queue(maxsize=2)  # Allow 2 frames in queue
         self.result_queue = queue.Queue(maxsize=2)  # Allow 2 results in queue
@@ -39,7 +43,7 @@ class FaceRecognitionSystem:
         self.last_detections = []  # Store previous detections
         self.detection_counter = 0  # Counter for detection persistence
         
-        # Load dataset once at initialization
+        # Load dataset and compute/load embeddings
         self.load_dataset_and_attendance()
         
     def load_dataset_and_attendance(self):
@@ -64,9 +68,53 @@ class FaceRecognitionSystem:
                     self.name_mapping[name_key] = base_name
                 
                 self.dataset[name_key].append(os.path.join(DATASET_PATH, filename))
+        
+        # Load or compute embeddings
+        self.load_or_compute_embeddings()
                 
         print(f"Loaded {len(self.dataset)} identities from dataset")
         print(f"Already attended today: {len(self.attendance_today)} people")
+    
+    def load_or_compute_embeddings(self):
+        """Load precomputed embeddings or compute them if not available"""
+        if os.path.exists(EMBEDDINGS_PATH):
+            try:
+                print("Loading precomputed embeddings...")
+                with open(EMBEDDINGS_PATH, 'rb') as f:
+                    self.embeddings = pickle.load(f)
+                print(f"Loaded {len(self.embeddings)} precomputed embeddings")
+                return
+            except Exception as e:
+                print(f"Error loading embeddings: {e}")
+        
+        print("Computing embeddings for dataset (this may take a while)...")
+        # Create embeddings for all dataset images
+        for name_key, images in self.dataset.items():
+            self.embeddings[name_key] = []
+            for img_path in images:
+                try:
+                    print(f"Computing embedding for {img_path}")
+                    # Get embedding using DeepFace
+                    embedding_objs = DeepFace.represent(
+                        img_path=img_path,
+                        model_name='Facenet',
+                        enforce_detection=False,
+                        detector_backend='opencv',
+                        align=True,
+                        normalization='Facenet'
+                    )
+                    if embedding_objs and len(embedding_objs) > 0:
+                        self.embeddings[name_key].append(embedding_objs[0]['embedding'])
+                except Exception as e:
+                    print(f"Error computing embedding for {img_path}: {e}")
+        
+        # Save embeddings to file
+        try:
+            with open(EMBEDDINGS_PATH, 'wb') as f:
+                pickle.dump(self.embeddings, f)
+            print("Embeddings saved successfully")
+        except Exception as e:
+            print(f"Error saving embeddings: {e}")
         
     def update_attendance(self, name_key):
         self.attendance_today.add(name_key)
@@ -107,6 +155,9 @@ class FaceRecognitionSystem:
     
     def face_detection_thread(self):
         """Dedicated thread just for face detection to maintain smooth tracking"""
+        # Load face detector once
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        
         while self.running:
             try:
                 # Get the latest frame
@@ -122,62 +173,44 @@ class FaceRecognitionSystem:
                     # Resize for faster detection (but keep original for display)
                     small_frame = cv2.resize(frame, PROCESSING_SIZE)
                     
-                    # Use DeepFace with SSD detector for face detection
-                    faces = []
-                    try:
-                        # Only run detector on certain frames to maintain performance
-                        if self.frame_count % SKIP_FRAMES == 0:
-                            faces = DeepFace.extract_faces(
-                                img_path=small_frame,
-                                detector_backend='mtcnn',
-                                enforce_detection=False,
-                                align=False
-                            )
-                    except Exception as e:
-                        print(f"Error in SSD detection: {str(e)}")
-                        faces = []
+                    # Detect faces on every frame for smoother tracking using OpenCV's faster detector
+                    gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
+                    faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(30, 30))
                     
                     # Scale back to original frame size
                     scale_x = frame.shape[1] / PROCESSING_SIZE[0]
                     scale_y = frame.shape[0] / PROCESSING_SIZE[1]
                     
-                    for face_data in faces:
-                        if 'facial_area' in face_data:
-                            # Get facial area coordinates
-                            x_small = face_data['facial_area']['x']
-                            y_small = face_data['facial_area']['y']
-                            w_small = face_data['facial_area']['w']
-                            h_small = face_data['facial_area']['h']
-                            
-                            # Scale back to original frame coordinates
-                            x = int(x_small * scale_x)
-                            y = int(y_small * scale_y)
-                            w = int(w_small * scale_x)
-                            h = int(h_small * scale_y)
-                            
-                            # Ensure dimensions are within frame bounds
-                            x = max(0, x)
-                            y = max(0, y)
-                            w = min(w, frame.shape[1] - x)
-                            h = min(h, frame.shape[0] - y)
-                            
-                            face_info = {
-                                'box': (x, y, w, h),
-                                'name': "Unknown",
-                                'accuracy': 0,
-                                'already_attended': False
-                            }
-                            
-                            # Only queue for recognition if it's time
-                            current_time = time.time()
-                            if current_time - self.last_detection_time > COOLDOWN:
-                                face_img = frame[y:y+h, x:x+w]
-                                # Put in recognition queue if not full
-                                if not self.recognition_queue.full():
-                                    self.recognition_queue.put((face_img, face_info, clean_frame))
-                                    self.last_detection_time = current_time
-                            
-                            detections.append(face_info)
+                    for (x_small, y_small, w_small, h_small) in faces:
+                        # Scale back to original frame coordinates
+                        x = int(x_small * scale_x)
+                        y = int(y_small * scale_y)
+                        w = int(w_small * scale_x)
+                        h = int(h_small * scale_y)
+                        
+                        # Ensure dimensions are within frame bounds
+                        x = max(0, x)
+                        y = max(0, y)
+                        w = min(w, frame.shape[1] - x)
+                        h = min(h, frame.shape[0] - y)
+                        
+                        face_info = {
+                            'box': (x, y, w, h),
+                            'name': "Unknown",
+                            'accuracy': 0,
+                            'already_attended': False
+                        }
+                        
+                        # Only queue for recognition if it's time
+                        current_time = time.time()
+                        if self.frame_count % SKIP_FRAMES == 0 and current_time - self.last_detection_time > COOLDOWN:
+                            face_img = frame[y:y+h, x:x+w]
+                            # Put in recognition queue if not full
+                            if not self.recognition_queue.full():
+                                self.recognition_queue.put((face_img, face_info, clean_frame))
+                                self.last_detection_time = current_time
+                        
+                        detections.append(face_info)
                 
                     # Reset counter if we have new detections
                     if detections:
@@ -210,15 +243,11 @@ class FaceRecognitionSystem:
                         
                         self.last_detections = detections
                     else:
-                        # Use previous detections when no new faces detected
-                        if self.last_detections:
+                        # Increment counter when no faces detected
+                        self.detection_counter += 1
+                        # Keep showing the last detection for a few frames to avoid flickering
+                        if self.detection_counter < DETECTION_PERSISTENCE:
                             detections = self.last_detections
-                            # Increment counter when using previous detections
-                            self.detection_counter += 1
-                            # Only keep showing detections for a limited number of frames
-                            if self.detection_counter >= DETECTION_PERSISTENCE:
-                                self.last_detections = []
-                                detections = []
                 
                 except Exception as e:
                     print(f"Error in face detection: {str(e)}")
@@ -237,42 +266,82 @@ class FaceRecognitionSystem:
             
             time.sleep(0.001)  # Small sleep to prevent CPU hogging
     
+    def get_face_embedding(self, face_img):
+        """Extract facial embedding from image using FaceNet"""
+        try:
+            # Resize to optimal size for FaceNet
+            face_img = cv2.resize(face_img, VERIFICATION_SIZE)
+            
+            # Get embedding directly
+            embedding_objs = DeepFace.represent(
+                img_path=face_img,
+                model_name='Facenet',
+                enforce_detection=False,
+                detector_backend='skip',  # Skip detection since we already have the face
+                align=True,
+                normalization='Facenet'
+            )
+            
+            if embedding_objs and len(embedding_objs) > 0:
+                return embedding_objs[0]['embedding']
+            return None
+        except Exception as e:
+            print(f"Error getting face embedding: {e}")
+            return None
+    
+    def compare_embeddings(self, embedding1, embedding2):
+        """Compare two facial embeddings and return similarity score"""
+        if embedding1 is None or embedding2 is None:
+            return 0
+        
+        # Convert to numpy arrays
+        emb1 = np.array(embedding1)
+        emb2 = np.array(embedding2)
+        
+        # Calculate cosine similarity
+        dot = np.dot(emb1, emb2)
+        norm1 = np.linalg.norm(emb1)
+        norm2 = np.linalg.norm(emb2)
+        cosine = dot / (norm1 * norm2)
+        
+        # Convert to distance (0 is identical, 2 is completely different)
+        distance = 1 - cosine
+        
+        # Convert to accuracy percentage (100% is identical)
+        accuracy = (1 - distance) * 100
+        return accuracy
+    
     def recognition_thread(self):
         """Dedicated thread for face recognition to avoid impacting tracking FPS"""
         while self.running:
             try:
                 face_img, face_info, clean_frame = self.recognition_queue.get(timeout=1)
                 
+                # Extract embedding for the detected face
+                face_embedding = self.get_face_embedding(face_img)
+                
+                if face_embedding is None:
+                    continue
+                
                 highest_accuracy = 0
                 best_match_name = None
                 is_already_attended = False
                 
-                for name_key, images in self.dataset.items():
-                    # Only check first image for speed
-                    img_path = images[0]
+                # Compare with precomputed embeddings
+                for name_key, stored_embeddings in self.embeddings.items():
+                    # Skip if no valid embeddings for this person
+                    if not stored_embeddings:
+                        continue
                     
-                    try:
-                        # Use DeepFace for actual recognition
-                        result = DeepFace.verify(
-                            img1_path=face_img,
-                            img2_path=img_path,
-                            model_name='Facenet',
-                            distance_metric='cosine',
-                            threshold=FACE_MATCH_THRESHOLD,
-                            enforce_detection=False,
-                            align=False
-                        )
-                        
-                        current_accuracy = (1 - result['distance']) * 100
+                    # Compare with each stored embedding for this person
+                    for stored_embedding in stored_embeddings:
+                        current_accuracy = self.compare_embeddings(face_embedding, stored_embedding)
                         
                         if current_accuracy > highest_accuracy:
                             highest_accuracy = current_accuracy
                             best_match_name = name_key
                             # Check if this matched person already attended
                             is_already_attended = (name_key in self.attendance_today)
-                            
-                    except Exception as e:
-                        continue
                 
                 # If we found a match with good confidence
                 if highest_accuracy >= 75 and best_match_name:
@@ -297,7 +366,7 @@ class FaceRecognitionSystem:
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         log_filename = f"{self.name_mapping[best_match_name]}_{timestamp}.jpg"
                         
-                        # Save the clean attendance log asynchronously
+                        # Save the clean attendance log
                         cv2.imwrite(os.path.join(log_dir, log_filename), clean_frame)
                         
                         print(f"Attendance: {self.name_mapping[best_match_name]} | Accuracy: {highest_accuracy:.1f}%")
