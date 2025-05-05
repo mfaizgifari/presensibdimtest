@@ -17,12 +17,12 @@ RESOLUTION = (800, 480)
 DATASET_PATH = "cleaned_dataset"
 LOG_PATH = "log_presensi"
 EMBEDDINGS_PATH = "embeddings.pkl"
-FACE_MATCH_THRESHOLD = 0.6
+FACE_MATCH_THRESHOLD = 0.80
 COOLDOWN = 1
 SKIP_FRAMES = 1
 DETECTION_PERSISTENCE = 2
 PROCESSING_SIZE = (480, 480)
-VERIFICATION_SIZE = (160, 160)  # Standard size for FaceNet inputs
+VERIFICATION_SIZE = (160, 160)  
 
 # Firebase Configuration
 FIREBASE_CREDENTIALS = "serviceAccountKey.json"  # Path to your Firebase credentials file
@@ -483,7 +483,7 @@ class FaceRecognitionSystem:
                             continue
                 
                 # If we found a match with good confidence
-                if highest_accuracy >= 75 and best_match_name:
+                if highest_accuracy >= 80 and best_match_name:
                     x, y, w, h = face_info['box']
                     
                     # Update the face info in last_detections
