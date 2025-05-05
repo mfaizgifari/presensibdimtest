@@ -7,6 +7,7 @@ import numpy as np
 from deepface import DeepFace
 from datetime import datetime
 import pickle
+import subprocess
 
 # Configuration
 RESOLUTION = (800, 480)  # Keeping original resolution as requested
@@ -42,6 +43,7 @@ class FaceRecognitionSystem:
         self.last_fps_time = time.time()
         self.last_detections = []  # Store previous detections
         self.detection_counter = 0  # Counter for detection persistence
+        self.attendance_updated = False  # Flag to track if attendance was updated
         
         # Load dataset and compute/load embeddings
         self.load_dataset_and_attendance()
@@ -118,6 +120,7 @@ class FaceRecognitionSystem:
         
     def update_attendance(self, name_key):
         self.attendance_today.add(name_key)
+        self.attendance_updated = True
     
     def capture_thread(self):
         camera = cv2.VideoCapture(0)
@@ -438,6 +441,26 @@ class FaceRecognitionSystem:
             
             time.sleep(0.001)  # Small sleep to prevent CPU hogging
     
+    def firebase_upload_thread(self):
+        """Thread to check for attendance updates and trigger Firebase upload"""
+        last_upload_time = 0
+        while self.running:
+            current_time = time.time()
+            
+            # Check if attendance was updated and if enough time has passed since last upload (5 seconds)
+            if self.attendance_updated and current_time - last_upload_time > 5:
+                print("Attendance updated, uploading to Firebase...")
+                try:
+                    # Run the Firebase upload script
+                    subprocess.run(['python', 'presensi_firebase.py'])
+                    print("Firebase upload completed!")
+                    self.attendance_updated = False
+                    last_upload_time = current_time
+                except Exception as e:
+                    print(f"Error running Firebase upload: {e}")
+            
+            time.sleep(1)  # Check every second
+    
     def run(self):
         print("Starting Face Recognition System...")
         
@@ -446,16 +469,19 @@ class FaceRecognitionSystem:
         detection_thread = threading.Thread(target=self.face_detection_thread)
         recognition_thread = threading.Thread(target=self.recognition_thread)
         display_thread = threading.Thread(target=self.display_thread)
+        firebase_thread = threading.Thread(target=self.firebase_upload_thread)
         
         capture_thread.daemon = True
         detection_thread.daemon = True
         recognition_thread.daemon = True
         display_thread.daemon = True
+        firebase_thread.daemon = True
         
         capture_thread.start()
         detection_thread.start()
         recognition_thread.start()
         display_thread.start()
+        firebase_thread.start()
         
         # Wait for all threads to finish
         try:
@@ -469,6 +495,7 @@ class FaceRecognitionSystem:
         detection_thread.join()
         recognition_thread.join()
         display_thread.join()
+        firebase_thread.join()
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":
