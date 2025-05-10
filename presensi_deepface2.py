@@ -8,15 +8,17 @@ from deepface import DeepFace
 from datetime import datetime
 import pickle
 import subprocess
+import tkinter as tk
+from tkinter import Toplevel
 
 # Configuration
-RESOLUTION = (800, 480)  # Keeping original resolution as requested
+RESOLUTION = (800, 480) 
 DATASET_PATH = "cleaned_dataset"
 LOG_PATH = "log_presensi"
 EMBEDDINGS_PATH = "embeddings.pkl"  # New: Store precomputed embeddings
 MIN_ACCURACY = 0.8  # 80% confidence for face detection
-FACE_MATCH_THRESHOLD = 0.7  # Optimal threshold for Facenet
-COOLDOWN = 1.0  # Increased cooldown to reduce recognition attempts
+FACE_MATCH_THRESHOLD = 0.55 
+COOLDOWN = 1  # Increased cooldown to reduce recognition attempts
 SKIP_FRAMES = 3  # Process every nth frame for recognition (increased)
 DETECTION_PERSISTENCE = 1  # Number of frames to keep showing detection when not processing
 PROCESSING_SIZE = (320, 240)  # Smaller size for processing to improve performance
@@ -26,8 +28,72 @@ VERIFICATION_SIZE = (160, 160)  # Standard size for FaceNet inputs
 os.makedirs(DATASET_PATH, exist_ok=True)
 os.makedirs(LOG_PATH, exist_ok=True)
 
+# Function to create and show a success notification window
+def show_success_notification(name):
+    # Create a new top-level window
+    notification_window = Toplevel()
+    notification_window.title("Presensi Berhasil")
+    
+    # Set window properties
+    notification_window.overrideredirect(True)  # Remove window decorations
+    notification_window.attributes('-topmost', True)  # Keep on top
+    notification_window.configure(bg="white")
+    
+    # Calculate position (center of screen)
+    screen_width = notification_window.winfo_screenwidth()
+    screen_height = notification_window.winfo_screenheight()
+    window_width = 400
+    window_height = 300
+    x_position = (screen_width - window_width) // 2
+    y_position = (screen_height - window_height) // 2
+    
+    notification_window.geometry(f"{window_width}x{window_height}+{x_position}+{y_position}")
+    
+    # Add a frame with white background and rounded corners effect
+    main_frame = tk.Frame(notification_window, bg="white", padx=20, pady=20)
+    main_frame.pack(fill=tk.BOTH, expand=True)
+    
+    # Add checkmark symbol (using Unicode character)
+    checkmark_label = tk.Label(
+        main_frame, 
+        text="✓", 
+        font=("Arial", 60), 
+        fg="#4CAF50",  # Green color
+        bg="white"
+    )
+    checkmark_label.pack(pady=(20, 10))
+    
+    # Add "Presensi Berhasil" header
+    header_label = tk.Label(
+        main_frame, 
+        text="Presensi Berhasil", 
+        font=("Arial", 18, "bold"), 
+        fg="#333333",
+        bg="white"
+    )
+    header_label.pack(pady=(0, 10))
+    
+    # Add name subheader
+    subheader_label = tk.Label(
+        main_frame, 
+        text=f"{name} berhasil melakukan presensi!", 
+        font=("Arial", 14), 
+        fg="#666666",
+        bg="white"
+    )
+    subheader_label.pack(pady=(0, 20))
+    
+    # Auto-close after 5 seconds
+    notification_window.after(5000, notification_window.destroy)
+    
+    return notification_window
+
 class FaceRecognitionSystem:
     def __init__(self):
+        # Initialize Tkinter root but keep it hidden
+        self.tk_root = tk.Tk()
+        self.tk_root.withdraw()  # Hide the main root window
+        
         self.dataset = {}
         self.name_mapping = {}
         self.embeddings = {}  # New: Store precomputed face embeddings
@@ -349,13 +415,14 @@ class FaceRecognitionSystem:
                 # If we found a match with good confidence
                 if highest_accuracy >= 75 and best_match_name:
                     x, y, w, h = face_info['box']
+                    display_name = self.name_mapping[best_match_name]
                     
                     # Update the face info in last_detections
                     for face in self.last_detections:
                         face_x, face_y, face_w, face_h = face['box']
                         # If this is the same face (close enough position)
                         if abs(face_x - x) < 30 and abs(face_y - y) < 30:
-                            face['name'] = self.name_mapping[best_match_name]
+                            face['name'] = display_name
                             face['accuracy'] = highest_accuracy
                             face['already_attended'] = is_already_attended
                     
@@ -367,15 +434,19 @@ class FaceRecognitionSystem:
                         os.makedirs(log_dir, exist_ok=True)
                         
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        log_filename = f"{self.name_mapping[best_match_name]}_{timestamp}.jpg"
+                        log_filename = f"{display_name}_{timestamp}.jpg"
                         
                         # Save the clean attendance log
                         cv2.imwrite(os.path.join(log_dir, log_filename), clean_frame)
                         
-                        print(f"Attendance: {self.name_mapping[best_match_name]} | Accuracy: {highest_accuracy:.1f}%")
+                        print(f"Attendance: {display_name} | Accuracy: {highest_accuracy:.1f}%")
                         self.update_attendance(best_match_name)
+                        
+                        # Show success notification using the Tkinter main thread
+                        self.tk_root.after(0, lambda n=display_name: show_success_notification(n))
+                        
                     else:
-                        print(f"Already attended: {self.name_mapping[best_match_name]} | Accuracy: {highest_accuracy:.1f}%")
+                        print(f"Already attended: {display_name} | Accuracy: {highest_accuracy:.1f}%")
                 
             except queue.Empty:
                 pass
@@ -483,14 +554,24 @@ class FaceRecognitionSystem:
         display_thread.start()
         firebase_thread.start()
         
-        # Wait for all threads to finish
+        # Run Tkinter main loop in the background with minimal update frequency
+        def update_tk():
+            if self.running:
+                self.tk_root.after(100, update_tk)
+        
+        update_tk()  # Start the update cycle
+        
+        # Wait for all threads to finish or until Ctrl+C
         try:
-            while self.running:
-                time.sleep(0.1)
+            # Use mainloop to handle Tkinter events properly
+            self.tk_root.mainloop()
         except KeyboardInterrupt:
             print("Shutting down...")
             self.running = False
         
+        # Clean up
+        self.running = False
+        self.tk_root.quit()
         capture_thread.join()
         detection_thread.join()
         recognition_thread.join()
