@@ -11,6 +11,25 @@ import subprocess
 import tkinter as tk
 from tkinter import Toplevel
 
+# First run the prerequisite scripts
+print("Step 1: Updating dataset from Firebase...")
+try:
+    # Run the presensi_update.py script to download the latest data from Firebase
+    subprocess.run(['python', 'presensi_update.py'], check=True)
+    print("Dataset update completed.")
+except Exception as e:
+    print(f"Error updating dataset: {e}")
+
+print("Step 2: Cleaning the dataset...")
+try:
+    # Run the dataset_cleaner.py script to process the downloaded images
+    subprocess.run(['python', 'dataset_cleaner.py'], check=True)
+    print("Dataset cleaning completed.")
+except Exception as e:
+    print(f"Error cleaning dataset: {e}")
+
+print("Step 3: Starting face recognition system...")
+
 # Configuration
 RESOLUTION = (800, 480) 
 DATASET_PATH = "cleaned_dataset"
@@ -23,6 +42,7 @@ SKIP_FRAMES = 3  # Process every nth frame for recognition (increased)
 DETECTION_PERSISTENCE = 1  # Number of frames to keep showing detection when not processing
 PROCESSING_SIZE = (320, 240)  # Smaller size for processing to improve performance
 VERIFICATION_SIZE = (160, 160)  # Standard size for FaceNet inputs
+FONT = cv2.FONT_HERSHEY_COMPLEX  # Changed from SIMPLEX to COMPLEX for Arial-like font
 
 # Create necessary directories
 os.makedirs(DATASET_PATH, exist_ok=True)
@@ -116,7 +136,7 @@ class FaceRecognitionSystem:
         
     def load_dataset_and_attendance(self):
         # Check attendance for today
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%d-%m-%Y")  # Changed date format to day-month-year
         today_log_dir = os.path.join(LOG_PATH, today)
         
         if os.path.exists(today_log_dir):
@@ -346,7 +366,6 @@ class FaceRecognitionSystem:
                 img_path=face_img,
                 model_name='Facenet',
                 enforce_detection=False,
-                detector_backend='skip',  # Skip detection since we already have the face
                 align=True,
                 normalization='Facenet'
             )
@@ -429,11 +448,11 @@ class FaceRecognitionSystem:
                     # Only log attendance if person hasn't attended yet
                     if not is_already_attended:
                         # Log attendance with clean frame (no overlays)
-                        today = datetime.now().strftime("%Y-%m-%d")
+                        today = datetime.now().strftime("%d-%m-%Y")  # Changed date format to day-month-year
                         log_dir = os.path.join(LOG_PATH, today)
                         os.makedirs(log_dir, exist_ok=True)
                         
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        timestamp = datetime.now().strftime("%d-%m-%Y_%H%M%S")  # Changed timestamp format to day-month-year
                         log_filename = f"{display_name}_{timestamp}.jpg"
                         
                         # Save the clean attendance log
@@ -461,9 +480,9 @@ class FaceRecognitionSystem:
                 frame, detections = self.result_queue.get(timeout=1)
                 display_frame = frame.copy()  # Create a copy for display purposes
                 
-                # Draw FPS counter
+                # Draw FPS counter with Arial-like font
                 cv2.putText(display_frame, f"FPS: {self.fps}", (10, 30), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                            FONT, 0.7, (255, 255, 255), 2)
                 
                 # Draw face detections with name and accuracy
                 for face in detections:
@@ -479,7 +498,7 @@ class FaceRecognitionSystem:
                         label += f" ({face['accuracy']:.1f}%)"
                     
                     # Calculate label position and draw background
-                    label_size, base_line = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                    label_size, base_line = cv2.getTextSize(label, FONT, 0.5, 1)
                     y_label = max(y - 10, label_size[1])
                     
                     # Draw label background
@@ -491,12 +510,12 @@ class FaceRecognitionSystem:
                         cv2.FILLED
                     )
                     
-                    # Draw label text
+                    # Draw label text with Arial-like font
                     cv2.putText(
                         display_frame, 
                         label, 
                         (x, y_label), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 
+                        FONT, 
                         0.5, 
                         (255, 255, 255), 
                         1
@@ -533,7 +552,6 @@ class FaceRecognitionSystem:
             time.sleep(1)  # Check every second
     
     def run(self):
-        print("Starting Face Recognition System...")
         
         # Start threads
         capture_thread = threading.Thread(target=self.capture_thread)
