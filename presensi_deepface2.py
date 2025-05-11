@@ -138,28 +138,35 @@ class FaceRecognitionSystem:
         # Check attendance for today
         today = datetime.now().strftime("%d-%m-%Y")  # Changed date format to day-month-year
         today_log_dir = os.path.join(LOG_PATH, today)
-        
+    
         if os.path.exists(today_log_dir):
             for filename in os.listdir(today_log_dir):
                 if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                # Extract name from filename (everything before the first underscore)
                     name = filename.split('_')[0].lower()
                     self.attendance_today.add(name)
-        
-        # Load dataset
+    
+    # Load dataset
         for filename in os.listdir(DATASET_PATH):
             if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-                base_name = "_".join(filename.split("_")[:-1])
-                name_key = base_name.lower()
+            # Use the FULL name before the last underscore (not just partial name)
+            # This ensures we're using "radityafawwaz" not "radit"
+                parts = filename.split("_")
+                if len(parts) > 1:
+                # If filename format is "name_number.ext", use everything before the last underscore
+                    name_parts = parts[:-1]  # All parts except the last one (which is the number)
+                    base_name = "_".join(name_parts)
+                    name_key = base_name.lower()
                 
-                if name_key not in self.dataset:
-                    self.dataset[name_key] = []
-                    self.name_mapping[name_key] = base_name
+                    if name_key not in self.dataset:
+                        self.dataset[name_key] = []
+                        self.name_mapping[name_key] = base_name
                 
-                self.dataset[name_key].append(os.path.join(DATASET_PATH, filename))
-        
-        # Load or compute embeddings
+                    self.dataset[name_key].append(os.path.join(DATASET_PATH, filename))
+    
+    # Load or compute embeddings
         self.load_or_compute_embeddings()
-                
+            
         print(f"Loaded {len(self.dataset)} identities from dataset")
         print(f"Already attended today: {len(self.attendance_today)} people")
     
@@ -579,7 +586,6 @@ class FaceRecognitionSystem:
         
         update_tk()  # Start the update cycle
         
-        # Wait for all threads to finish or until Ctrl+C
         try:
             # Use mainloop to handle Tkinter events properly
             self.tk_root.mainloop()
