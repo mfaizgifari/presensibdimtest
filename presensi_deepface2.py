@@ -34,7 +34,8 @@ print("Step 3: Starting face recognition system...")
 RESOLUTION = (800, 480) 
 DATASET_PATH = "cleaned_dataset"
 LOG_PATH = "log_presensi"
-EMBEDDINGS_PATH = "embeddings.pkl"  # New: Store precomputed embeddings
+EMBEDDINGS_PATH = "embeddings.pkl"  # Store precomputed embeddings
+EMBEDDINGS_META_PATH = "embeddings_meta.pkl"  # New: Store metadata about embeddings
 MIN_ACCURACY = 0.8  # 80% confidence for face detection
 FACE_MATCH_THRESHOLD = 0.55 
 COOLDOWN = 1  # Increased cooldown to reduce recognition attempts
@@ -116,7 +117,11 @@ class FaceRecognitionSystem:
         
         self.dataset = {}
         self.name_mapping = {}
-        self.embeddings = {}  # New: Store precomputed face embeddings
+        self.embeddings = {}  # Store precomputed face embeddings
+        self.embeddings_meta = {
+            'dataset_files': [],  # List of files in dataset when embeddings were last computed
+            'timestamp': 0        # When embeddings were last computed
+        }
         self.attendance_today = set()
         self.frame_queue = queue.Queue(maxsize=2)  # Allow 2 frames in queue
         self.result_queue = queue.Queue(maxsize=2)  # Allow 2 results in queue
@@ -138,54 +143,84 @@ class FaceRecognitionSystem:
         # Check attendance for today
         today = datetime.now().strftime("%d-%m-%Y")  # Changed date format to day-month-year
         today_log_dir = os.path.join(LOG_PATH, today)
-    
+        
         if os.path.exists(today_log_dir):
             for filename in os.listdir(today_log_dir):
                 if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-                # Extract name from filename (everything before the first underscore)
+                    # Extract name from filename (everything before the first underscore)
                     name = filename.split('_')[0].lower()
                     self.attendance_today.add(name)
-    
-    # Load dataset
+        
+        # Load dataset
+        dataset_files = []
         for filename in os.listdir(DATASET_PATH):
             if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            # Use the FULL name before the last underscore (not just partial name)
-            # This ensures we're using "radityafawwaz" not "radit"
+                dataset_files.append(filename)
+                
+                # Use the FULL name before the last underscore (not just partial name)
                 parts = filename.split("_")
                 if len(parts) > 1:
-                # If filename format is "name_number.ext", use everything before the last underscore
-                    name_parts = parts[:-1]  # All parts except the last one (which is the number)
+                    # Get everything before the number part (last part)
+                    name_parts = parts[:-1]
                     base_name = "_".join(name_parts)
                     name_key = base_name.lower()
-                
+                    
                     if name_key not in self.dataset:
                         self.dataset[name_key] = []
                         self.name_mapping[name_key] = base_name
-                
+                    
                     self.dataset[name_key].append(os.path.join(DATASET_PATH, filename))
-    
-    # Load or compute embeddings
-        self.load_or_compute_embeddings()
-            
+        
+        # Load or compute embeddings with consistency check
+        self.check_and_update_embeddings(dataset_files)
+                
         print(f"Loaded {len(self.dataset)} identities from dataset")
         print(f"Already attended today: {len(self.attendance_today)} people")
     
-    def load_or_compute_embeddings(self):
-        """Load precomputed embeddings or compute them if not available"""
-        if os.path.exists(EMBEDDINGS_PATH):
-            try:
-                print("Loading precomputed embeddings...")
-                with open(EMBEDDINGS_PATH, 'rb') as f:
-                    self.embeddings = pickle.load(f)
-                print(f"Loaded {len(self.embeddings)} precomputed embeddings")
-                return
-            except Exception as e:
-                print(f"Error loading embeddings: {e}")
+    def check_and_update_embeddings(self, current_files):
+        """Check if embeddings are up-to-date and update if needed"""
+        embeddings_need_update = True
         
+        # Try to load existing embeddings metadata
+        if os.path.exists(EMBEDDINGS_META_PATH):
+            try:
+                with open(EMBEDDINGS_META_PATH, 'rb') as f:
+                    self.embeddings_meta = pickle.load(f)
+                
+                # Compare dataset files when embeddings were computed with current files
+                old_files_set = set(self.embeddings_meta['dataset_files'])
+                current_files_set = set(current_files)
+                
+                # If dataset hasn't changed, we can use existing embeddings
+                if old_files_set == current_files_set and os.path.exists(EMBEDDINGS_PATH):
+                    try:
+                        print("Loading existing embeddings (dataset unchanged)...")
+                        with open(EMBEDDINGS_PATH, 'rb') as f:
+                            self.embeddings = pickle.load(f)
+                        print(f"Loaded {len(self.embeddings)} existing embeddings")
+                        embeddings_need_update = False
+                    except Exception as e:
+                        print(f"Error loading embeddings: {e}")
+                        embeddings_need_update = True
+                else:
+                    print("Dataset has changed since last run. Rebuilding embeddings...")
+            except Exception as e:
+                print(f"Error loading embeddings metadata: {e}")
+        
+        # Compute embeddings if needed
+        if embeddings_need_update:
+            self.compute_embeddings(current_files)
+    
+    def compute_embeddings(self, current_files):
+        """Compute embeddings for all dataset images"""
         print("Computing embeddings for dataset (this may take a while)...")
+        self.embeddings = {}
+        
         # Create embeddings for all dataset images
         for name_key, images in self.dataset.items():
+            print(f"Computing embeddings for person: {name_key}")
             self.embeddings[name_key] = []
+            
             for img_path in images:
                 try:
                     print(f"Computing embedding for {img_path}")
@@ -205,9 +240,19 @@ class FaceRecognitionSystem:
         
         # Save embeddings to file
         try:
+            # Save embeddings
             with open(EMBEDDINGS_PATH, 'wb') as f:
                 pickle.dump(self.embeddings, f)
-            print("Embeddings saved successfully")
+            
+            # Save metadata about when embeddings were computed
+            self.embeddings_meta = {
+                'dataset_files': current_files,
+                'timestamp': time.time()
+            }
+            with open(EMBEDDINGS_META_PATH, 'wb') as f:
+                pickle.dump(self.embeddings_meta, f)
+                
+            print("Embeddings and metadata saved successfully")
         except Exception as e:
             print(f"Error saving embeddings: {e}")
         
@@ -439,7 +484,7 @@ class FaceRecognitionSystem:
                             is_already_attended = (name_key in self.attendance_today)
                 
                 # If we found a match with good confidence
-                if highest_accuracy >= 80 and best_match_name:
+                if highest_accuracy >= 75 and best_match_name:
                     x, y, w, h = face_info['box']
                     display_name = self.name_mapping[best_match_name]
                     
@@ -455,7 +500,7 @@ class FaceRecognitionSystem:
                     # Only log attendance if person hasn't attended yet
                     if not is_already_attended:
                         # Log attendance with clean frame (no overlays)
-                        today = datetime.now().strftime("%d-%m-%Y")  
+                        today = datetime.now().strftime("%d-%m-%Y")  # Changed date format to day-month-year
                         log_dir = os.path.join(LOG_PATH, today)
                         os.makedirs(log_dir, exist_ok=True)
                         
@@ -586,6 +631,7 @@ class FaceRecognitionSystem:
         
         update_tk()  # Start the update cycle
         
+        # Wait for all threads to finish or until Ctrl+C
         try:
             # Use mainloop to handle Tkinter events properly
             self.tk_root.mainloop()
