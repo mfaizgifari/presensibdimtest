@@ -116,7 +116,9 @@ class FaceRecognitionSystem:
         
         self.dataset = {}
         self.name_mapping = {}
-        self.embeddings = {}  # New: Store precomputed face embeddings
+        self.display_name_mapping = {}  # New: Map to handle display names
+        self.nickname_mapping = {}  # New: Handle nicknames/partial names
+        self.embeddings = {}  # Store precomputed face embeddings
         self.attendance_today = set()
         self.frame_queue = queue.Queue(maxsize=2)  # Allow 2 frames in queue
         self.result_queue = queue.Queue(maxsize=2)  # Allow 2 results in queue
@@ -148,12 +150,19 @@ class FaceRecognitionSystem:
         # Load dataset
         for filename in os.listdir(DATASET_PATH):
             if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                # Extract full name from filename (everything before the last underscore)
                 base_name = "_".join(filename.split("_")[:-1])
                 name_key = base_name.lower()
                 
                 if name_key not in self.dataset:
                     self.dataset[name_key] = []
                     self.name_mapping[name_key] = base_name
+                    
+                    # Add display name mapping
+                    self.display_name_mapping[name_key] = self.format_display_name(base_name)
+                    
+                    # Add nickname mappings for better matching
+                    self.add_nickname_mappings(name_key, base_name)
                 
                 self.dataset[name_key].append(os.path.join(DATASET_PATH, filename))
         
@@ -162,6 +171,58 @@ class FaceRecognitionSystem:
                 
         print(f"Loaded {len(self.dataset)} identities from dataset")
         print(f"Already attended today: {len(self.attendance_today)} people")
+        
+        # Debug: print all available name mappings for reference
+        print("\nAvailable name mappings:")
+        for key, value in self.name_mapping.items():
+            print(f"  {key} -> {value} (Display: {self.display_name_mapping[key]})")
+        
+        print("\nNickname mappings:")
+        for nickname, full_name in self.nickname_mapping.items():
+            print(f"  {nickname} -> {full_name}")
+    
+    def format_display_name(self, name):
+        """Format name for display (capitalize words, replace underscores with spaces)"""
+        parts = name.split('_')
+        return ' '.join(part.capitalize() for part in parts)
+    
+    def add_nickname_mappings(self, name_key, full_name):
+        """Add nickname mappings to handle partial name recognition"""
+        # Add full name mapping
+        self.nickname_mapping[name_key] = name_key
+        
+        # Add each part of the name as a potential nickname
+        parts = name_key.split('_')
+        for part in parts:
+            if len(part) >= 3:  # Only use parts that are at least 3 characters
+                self.nickname_mapping[part] = name_key
+        
+        # Example: for "radityafawwaz" add "radit" as nickname
+        if name_key.startswith('raditya'):
+            self.nickname_mapping['radit'] = name_key
+        
+        # Add more custom nickname mappings as needed
+        # Example:
+        # if "muhammad" in name_key:
+        #     self.nickname_mapping["muhamad"] = name_key
+        #     self.nickname_mapping["muhamat"] = name_key
+        #     self.nickname_mapping["muhamd"] = name_key
+    
+    def resolve_name(self, detected_name):
+        """Resolve a detected name to its full name using nickname mapping"""
+        detected_name = detected_name.lower()
+        
+        # Direct match first
+        if detected_name in self.name_mapping:
+            return detected_name
+            
+        # Check nickname mappings
+        if detected_name in self.nickname_mapping:
+            return self.nickname_mapping[detected_name]
+            
+        # Try fuzzy matching if needed (for future improvements)
+        # For now just return the original name
+        return detected_name
     
     def load_or_compute_embeddings(self):
         """Load precomputed embeddings or compute them if not available"""
@@ -434,7 +495,8 @@ class FaceRecognitionSystem:
                 # If we found a match with good confidence
                 if highest_accuracy >= 75 and best_match_name:
                     x, y, w, h = face_info['box']
-                    display_name = self.name_mapping[best_match_name]
+                    # Use the display name mapping for better user readability
+                    display_name = self.display_name_mapping[best_match_name]
                     
                     # Update the face info in last_detections
                     for face in self.last_detections:
@@ -453,7 +515,7 @@ class FaceRecognitionSystem:
                         os.makedirs(log_dir, exist_ok=True)
                         
                         timestamp = datetime.now().strftime("%d-%m-%Y_%H%M%S")  # Changed timestamp format to day-month-year
-                        log_filename = f"{display_name}_{timestamp}.jpg"
+                        log_filename = f"{self.name_mapping[best_match_name]}_{timestamp}.jpg"
                         
                         # Save the clean attendance log
                         cv2.imwrite(os.path.join(log_dir, log_filename), clean_frame)
@@ -471,6 +533,8 @@ class FaceRecognitionSystem:
                 pass
             except Exception as e:
                 print(f"Error in recognition: {str(e)}")
+                import traceback
+                traceback.print_exc()  # Print full traceback for better debugging
             
             time.sleep(0.001)  # Small sleep to prevent CPU hogging
     
