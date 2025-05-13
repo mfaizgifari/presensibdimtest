@@ -101,7 +101,6 @@ def clean_dataset():
     print(f"- Skipped (sudah ada): {skipped_existing} gambar")
     print(f"- Skipped (gagal meproses): {skipped_failed} gambar")
     print(f"- Total gambar: {len(image_files)}")
-    print(f"- Jumlah waktu: {elapsed_time:.2f} detik")
 
 if __name__ == "__main__":
     clean_dataset()

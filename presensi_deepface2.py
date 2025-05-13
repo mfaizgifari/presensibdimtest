@@ -82,7 +82,7 @@ def show_success_notification(name):
         main_frame, 
         text="✓", 
         font=("Arial", 60), 
-        fg="#4CAF50",  # Green color
+        fg="#4CAF50",  
         bg="white"
     )
     checkmark_label.pack(pady=(20, 10))
@@ -100,7 +100,7 @@ def show_success_notification(name):
     # Add name subheader
     subheader_label = tk.Label(
         main_frame, 
-        text=f"{name} berhasil melakukan presensi!", 
+        text=f"{name} \n berhasil melakukan presensi!", 
         font=("Arial", 14), 
         fg="#666666",
         bg="white"
@@ -216,7 +216,7 @@ class FaceRecognitionSystem:
     
     def compute_embeddings(self, current_files):
         """Compute embeddings for all dataset images"""
-        print("Computing embeddings for dataset (this may take a while)...")
+        print("Computing embeddings for dataset...")
         self.embeddings = {}
         
         # Create embeddings for all dataset images
