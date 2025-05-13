@@ -3,82 +3,83 @@ import base64
 import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime
+from PIL import Image
+from io import BytesIO
 
-def upload_to_firebase():
-    # Check if Firebase is already initialized
-    if not firebase_admin._apps:
-        cred = credentials.Certificate('simkab-v00-firebase-adminsdk-msk6w-785957539f.json')
-        firebase_admin.initialize_app(cred)
-    
-    db = firestore.client()
+cred = credentials.Certificate('simkab-v00-firebase-adminsdk-msk6w-785957539f.json')
+firebase_admin.initialize_app(cred)
+db = firestore.client()
 
-    today = datetime.now().strftime("%Y-%m-%d")
-    log_dir = os.path.join("log_presensi", today)
+today = datetime.now().strftime("%Y-%m-%d")
+log_dir = os.path.join("log_presensi", today)
 
-    if not os.path.exists(log_dir):
-        print(f"Tidak ada folder log untuk hari ini: {log_dir}")
-        return
+if not os.path.exists(log_dir):
+    print(f"Tidak ada folder log untuk hari ini: {log_dir}")
+    exit()
 
-    kehadiran_collection = db.collection('KehadiranKaryawan')
-    kehadiran_docs = kehadiran_collection.get()
-    kehadiran_data = []
+for filename in os.listdir(log_dir):
+    if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+        file_path = os.path.join(log_dir, filename)
 
-    for doc in kehadiran_docs:
-        data = doc.to_dict()
-        kehadiran_data.append({
-            'id': doc.id,
-            'namaKaryawan': data.get('namaKaryawan', ''),
-            'tanggalKerja': data.get('tanggalKerja', ''),
-            'waktuKerja': data.get('waktuKerja', '')
-        })
+        try:
+            with Image.open(file_path) as img:
+                buffer = BytesIO()
+                img.convert("RGB").save(buffer, format="JPEG", quality=70)
+                encoded_string = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        except Exception as e:
+            print(f"Gagal mengoptimasi gambar {filename}: {e}")
+            continue
 
-    upload_count = 0
-    for filename in os.listdir(log_dir):
-        if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
-            file_path = os.path.join(log_dir, filename)
-            
-            # Check if file has already been uploaded by creating a marker file
-            marker_file = file_path + ".uploaded"
-            if os.path.exists(marker_file):
-                continue
-                
-            with open(file_path, "rb") as image_file:
-                encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+        split_name = filename.split('_')
+        if len(split_name) < 3:
+            print(f"Format nama file tidak sesuai: {filename}")
+            continue
 
-            split_name = filename.split('_')
-            nama_karyawan = split_name[0]
-            tanggal_waktu = "_".join(split_name[1:]).replace(".jpg", "").replace(".jpeg", "").replace(".png", "")
-            tanggal_presensi = tanggal_waktu[:8]
-            waktu_presensi = tanggal_waktu[9:]
+        username = split_name[0].lower()
+        tanggal_presensi = split_name[1]
+        waktu_presensi = split_name[2].split('.')[0]
 
-            tanggal_presensi_formatted = f"{tanggal_presensi[:4]}-{tanggal_presensi[4:6]}-{tanggal_presensi[6:]}"
-            waktu_presensi_formatted = f"{waktu_presensi[:2]}:{waktu_presensi[2:4]}:{waktu_presensi[4:]}"
+        try:
+            tanggal_obj = datetime.strptime(tanggal_presensi, "%d-%m-%Y")
+            tanggal_formatted = tanggal_obj.strftime("%Y-%m-%d")
+        except ValueError:
+            print(f"Format tanggal tidak valid di file: {filename}")
+            continue
 
-            matched_doc = None
-            for data in kehadiran_data:
-                if data['namaKaryawan'].lower().replace(' ', '') == nama_karyawan.lower() and data['tanggalKerja'] == tanggal_presensi_formatted:
-                    matched_doc = data
-                    break
+        try:
+            waktu_formatted = f"{waktu_presensi[:2]}:{waktu_presensi[2:4]}:{waktu_presensi[4:]}"
+        except:
+            print(f"Format waktu tidak valid di file: {filename}")
+            continue
 
-            if matched_doc:
-                doc_ref = kehadiran_collection.document(matched_doc['id'])
+        doc_ref = db.collection("dataKaryawan").document(username).collection("Kehadiran").document(tanggal_formatted)
+
+        try:
+            doc = doc_ref.get()
+            if doc.exists:
+                data = doc.to_dict()
+                waktu_kerja = data.get('waktuKerja')
+
+                if not waktu_kerja:
+                    print(f"Tidak ada data waktuKerja untuk {username} pada {tanggal_formatted}")
+                    continue
+
+                waktu_hadir_dt = datetime.strptime(f"{tanggal_formatted} {waktu_formatted}", "%Y-%m-%d %H:%M:%S")
+                waktu_kerja_dt = datetime.strptime(f"{tanggal_formatted} {waktu_kerja}", "%Y-%m-%d %H:%M")
+
+                waktu_telat = 0
+                if waktu_hadir_dt > waktu_kerja_dt:
+                    selisih = waktu_hadir_dt - waktu_kerja_dt
+                    waktu_telat = int(selisih.total_seconds() // 60)
+
                 doc_ref.update({
                     'photo': encoded_string,
                     'statusHadir': True,
-                    'waktuHadir': waktu_presensi_formatted,
-                    'waktuTelat': 0
+                    'waktuHadir': waktu_formatted,
+                    'waktuTelat': waktu_telat
                 })
-                print(f"Upload sukses untuk {nama_karyawan} pada {tanggal_presensi_formatted}")
-                
-                # Create marker file to indicate upload is complete
-                with open(marker_file, 'w') as f:
-                    f.write("1")
-                    
-                upload_count += 1
+                print(f"Presensi berhasil: {username} pada {tanggal_formatted} (Telat {waktu_telat} menit)")
             else:
-                print(f"Tidak ditemukan kecocokan untuk {nama_karyawan} pada {tanggal_presensi_formatted}")
-    
-    print(f"Uploaded {upload_count} new attendance records to Firebase")
-
-if __name__ == "__main__":
-    upload_to_firebase()
+                print(f"Tidak ditemukan kehadiran untuk {username} pada {tanggal_formatted}")
+        except Exception as e:
+            print(f"Kesalahan saat memperbarui kehadiran untuk {username} pada {tanggal_formatted}: {e}")

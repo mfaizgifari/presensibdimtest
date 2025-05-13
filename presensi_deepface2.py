@@ -10,6 +10,9 @@ import pickle
 import subprocess
 import tkinter as tk
 from tkinter import Toplevel
+from monitor_utils import start_monitoring
+
+start_monitoring()
 
 # First run the prerequisite scripts
 print("Step 1: Updating dataset from Firebase...")
@@ -141,7 +144,7 @@ class FaceRecognitionSystem:
         
     def load_dataset_and_attendance(self):
         # Check attendance for today
-        today = datetime.now().strftime("%d-%m-%Y")  # Changed date format to day-month-year
+        today = datetime.now().strftime("%Y-%m-%d")
         today_log_dir = os.path.join(LOG_PATH, today)
         
         if os.path.exists(today_log_dir):
@@ -500,7 +503,7 @@ class FaceRecognitionSystem:
                     # Only log attendance if person hasn't attended yet
                     if not is_already_attended:
                         # Log attendance with clean frame (no overlays)
-                        today = datetime.now().strftime("%d-%m-%Y")  # Changed date format to day-month-year
+                        today = datetime.now().strftime("%Y-%m-%d")
                         log_dir = os.path.join(LOG_PATH, today)
                         os.makedirs(log_dir, exist_ok=True)
                         
