@@ -11,7 +11,7 @@ import gc
 # Config
 INPUT_DIR = "dataset"
 OUTPUT_DIR = "cleaned_dataset"
-TARGET_SIZE = (250, 250)  # Ukuran wadah akhir
+TARGET_SIZE = (250, 250)  
 MARGIN_PERCENT = 0.15  # Margin tambahan di sekitar wajah
 JPEG_QUALITY = 95 # Kualitas output JPEG
 MAX_WORKERS = 2  # Jumlah worker untuk multiprocessing (sesuaikan dengan Pi 5)
