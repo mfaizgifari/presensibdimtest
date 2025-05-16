@@ -34,7 +34,7 @@ except Exception as e:
 print("Step 3: Starting face recognition system...")
 
 # Configuration
-RESOLUTION = (800, 480) 
+RESOLUTION = (780, 500) 
 DATASET_PATH = "cleaned_dataset"
 LOG_PATH = "log_presensi"
 EMBEDDINGS_PATH = "embeddings.pkl"  # Store precomputed embeddings
@@ -107,8 +107,8 @@ def show_success_notification(name):
     )
     subheader_label.pack(pady=(0, 20))
     
-    # Auto-close after 5 seconds
-    notification_window.after(5000, notification_window.destroy)
+    # Auto-close after 3 seconds
+    notification_window.after(3000, notification_window.destroy)
     
     return notification_window
 
