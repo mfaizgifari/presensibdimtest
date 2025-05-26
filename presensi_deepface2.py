@@ -44,11 +44,11 @@ MIN_ACCURACY = 0.8  # 80% confidence for face detection
 FACE_MATCH_THRESHOLD = 0.55 
 COOLDOWN = 1  # Increased cooldown to reduce recognition attempts
 SKIP_FRAMES = 3  # Process every nth frame for recognition (increased)
-DETECTION_PERSISTENCE = 1  # Number of frames to keep showing detection when not processing
+DETECTION_PERSISTENCE = 1  
 PROCESSING_SIZE = (320, 240)  # Smaller size for processing to improve performance
 VERIFICATION_SIZE = (160, 160)  # Standard size for FaceNet inputs
-FONT = cv2.FONT_HERSHEY_COMPLEX  # Changed from SIMPLEX to COMPLEX for Arial-like font
-RECOGNITION_COOLDOWN =  600
+FONT = cv2.FONT_HERSHEY_COMPLEX  
+RECOGNITION_COOLDOWN =  3600
 
 # Create necessary directories
 os.makedirs(DATASET_PATH, exist_ok=True)
@@ -617,24 +617,95 @@ class FaceRecognitionSystem:
             time.sleep(0.001)  # Small sleep to prevent CPU hogging
     
     def firebase_upload_thread(self):
-        """Thread to check for attendance updates and trigger Firebase upload"""
         last_upload_time = 0
+        upload_delay = 7        
+        def wait_for_file_stability(file_paths, max_wait=10):
+            """Wait for files to be stable (not being written to)"""
+            stable_count = 0
+            wait_time = 0
+            
+            while wait_time < max_wait:
+                all_stable = True
+                for file_path in file_paths:
+                    if os.path.exists(file_path):
+                        try:
+                            # Try to open file exclusively to check if it's being written
+                            with open(file_path, 'r+'):
+                                pass
+                        except:
+                            all_stable = False
+                            break
+                
+                if all_stable:
+                    stable_count += 1
+                    if stable_count >= 3:  # File stable for 3 seconds
+                        return True
+                else:
+                    stable_count = 0
+                
+                time.sleep(1)
+                wait_time += 1
+            return True  # Proceed anyway after max wait
+        
         while self.running:
             current_time = time.time()
+            if self.attendance_updated and current_time - last_upload_time > upload_delay:
+                print("Attendance updated, preparing for Firebase upload...")
+                
+                # Wait for file operations to complete
+                log_files = [
+                    'attendance_log.csv',  # Adjust to your actual log file names
+                    'attendance_data.json'  # Add other relevant files
+                ]
+                print("Waiting for file operations to stabilize...")
+                wait_for_file_stability([f for f in log_files if os.path.exists(f)])
+                
+                time.sleep(2)
+                print("Starting Firebase upload...")
+                max_retries = 3
+                retry_count = 0
+                
+                while retry_count < max_retries:
+                    try:
+                        result = subprocess.run(
+                            ['python', 'presensi_firebase.py'], 
+                            capture_output=True, 
+                            text=True, 
+                            timeout=45,
+                            cwd=os.getcwd()  # Ensure correct working directory
+                        )
+                        
+                        if result.returncode == 0:
+                            print("Firebase upload completed successfully!")
+                            if result.stdout:
+                                print(f"Upload details: {result.stdout.strip()}")
+                            break
+                        else:
+                            retry_count += 1
+                            print(f"Upload attempt {retry_count} failed: {result.stderr}")
+                            if retry_count < max_retries:
+                                print(f"Retrying in 3 seconds...")
+                                time.sleep(3)
+                    
+                    except subprocess.TimeoutExpired:
+                        retry_count += 1
+                        print(f"Upload attempt {retry_count} timed out")
+                        if retry_count < max_retries:
+                            print("Retrying...")
+                            time.sleep(3)
+                    except Exception as e:
+                        retry_count += 1
+                        print(f"Upload attempt {retry_count} error: {e}")
+                        if retry_count < max_retries:
+                            time.sleep(3)
+                
+                if retry_count >= max_retries:
+                    print("Firebase upload failed after all retry attempts")
+                
+                self.attendance_updated = False
+                last_upload_time = current_time
             
-            # Check if attendance was updated and if enough time has passed since last upload (5 seconds)
-            if self.attendance_updated and current_time - last_upload_time > 5:
-                print("Attendance updated, uploading to Firebase...")
-                try:
-                    # Run the Firebase upload script
-                    subprocess.run(['python', 'presensi_firebase.py'])
-                    print("Firebase upload completed!")
-                    self.attendance_updated = False
-                    last_upload_time = current_time
-                except Exception as e:
-                    print(f"Error running Firebase upload: {e}")
-            
-            time.sleep(1)  # Check every second
+            time.sleep(1)
     
     def run(self):
         
@@ -657,7 +728,6 @@ class FaceRecognitionSystem:
         display_thread.start()
         firebase_thread.start()
         
-        # Run Tkinter main loop in the background with minimal update frequency
         def update_tk():
             if self.running:
                 self.tk_root.after(100, update_tk)
