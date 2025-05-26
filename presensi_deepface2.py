@@ -11,6 +11,7 @@ import subprocess
 import tkinter as tk
 from tkinter import Toplevel
 from monitor_utils import start_monitoring
+from animasi_window import show_checkin_notification, show_checkout_notification
 
 start_monitoring()
 
@@ -34,7 +35,7 @@ except Exception as e:
 print("Step 3: Starting face recognition system...")
 
 # Configuration
-RESOLUTION = (780, 500) 
+RESOLUTION = (800, 480) 
 DATASET_PATH = "cleaned_dataset"
 LOG_PATH = "log_presensi"
 EMBEDDINGS_PATH = "embeddings.pkl"  # Store precomputed embeddings
@@ -47,70 +48,11 @@ DETECTION_PERSISTENCE = 1  # Number of frames to keep showing detection when not
 PROCESSING_SIZE = (320, 240)  # Smaller size for processing to improve performance
 VERIFICATION_SIZE = (160, 160)  # Standard size for FaceNet inputs
 FONT = cv2.FONT_HERSHEY_COMPLEX  # Changed from SIMPLEX to COMPLEX for Arial-like font
+RECOGNITION_COOLDOWN =  600
 
 # Create necessary directories
 os.makedirs(DATASET_PATH, exist_ok=True)
 os.makedirs(LOG_PATH, exist_ok=True)
-
-# Function to create and show a success notification window
-def show_success_notification(name):
-    # Create a new top-level window
-    notification_window = Toplevel()
-    notification_window.title("Presensi Berhasil")
-    
-    # Set window properties
-    notification_window.overrideredirect(True)  # Remove window decorations
-    notification_window.attributes('-topmost', True)  # Keep on top
-    notification_window.configure(bg="white")
-    
-    # Calculate position (center of screen)
-    screen_width = notification_window.winfo_screenwidth()
-    screen_height = notification_window.winfo_screenheight()
-    window_width = 400
-    window_height = 300
-    x_position = (screen_width - window_width) // 2
-    y_position = (screen_height - window_height) // 2
-    
-    notification_window.geometry(f"{window_width}x{window_height}+{x_position}+{y_position}")
-    
-    # Add a frame with white background and rounded corners effect
-    main_frame = tk.Frame(notification_window, bg="white", padx=20, pady=20)
-    main_frame.pack(fill=tk.BOTH, expand=True)
-    
-    # Add checkmark symbol (using Unicode character)
-    checkmark_label = tk.Label(
-        main_frame, 
-        text="✓", 
-        font=("Arial", 60), 
-        fg="#4CAF50",  
-        bg="white"
-    )
-    checkmark_label.pack(pady=(20, 10))
-    
-    # Add "Presensi Berhasil" header
-    header_label = tk.Label(
-        main_frame, 
-        text="Presensi Berhasil", 
-        font=("Arial", 18, "bold"), 
-        fg="#333333",
-        bg="white"
-    )
-    header_label.pack(pady=(0, 10))
-    
-    # Add name subheader
-    subheader_label = tk.Label(
-        main_frame, 
-        text=f"{name} \n berhasil melakukan presensi!", 
-        font=("Arial", 14), 
-        fg="#666666",
-        bg="white"
-    )
-    subheader_label.pack(pady=(0, 20))
-    
-    # Auto-close after 3 seconds
-    notification_window.after(3000, notification_window.destroy)
-    
-    return notification_window
 
 class FaceRecognitionSystem:
     def __init__(self):
@@ -125,7 +67,8 @@ class FaceRecognitionSystem:
             'dataset_files': [],  # List of files in dataset when embeddings were last computed
             'timestamp': 0        # When embeddings were last computed
         }
-        self.attendance_today = set()
+        self.attendance_today = {}  # Changed to dict to track check-in/check-out status
+        self.last_recognition_time = {}  # Track last recognition time for each person
         self.frame_queue = queue.Queue(maxsize=2)  # Allow 2 frames in queue
         self.result_queue = queue.Queue(maxsize=2)  # Allow 2 results in queue
         self.recognition_queue = queue.Queue(maxsize=1)  # Queue for face recognition tasks
@@ -152,7 +95,18 @@ class FaceRecognitionSystem:
                 if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
                     # Extract name from filename (everything before the first underscore)
                     name = filename.split('_')[0].lower()
-                    self.attendance_today.add(name)
+                    
+                    # Determine if it's check-in or check-out based on filename
+                    if "_masuk_" in filename.lower():
+                        if name not in self.attendance_today:
+                            self.attendance_today[name] = {'checkin': True, 'checkout': False}
+                        else:
+                            self.attendance_today[name]['checkin'] = True
+                    elif "_keluar_" in filename.lower():
+                        if name not in self.attendance_today:
+                            self.attendance_today[name] = {'checkin': False, 'checkout': True}
+                        else:
+                            self.attendance_today[name]['checkout'] = True
         
         # Load dataset
         dataset_files = []
@@ -178,7 +132,7 @@ class FaceRecognitionSystem:
         self.check_and_update_embeddings(dataset_files)
                 
         print(f"Loaded {len(self.dataset)} identities from dataset")
-        print(f"Already attended today: {len(self.attendance_today)} people")
+        print(f"Attendance status today: {len(self.attendance_today)} people")
     
     def check_and_update_embeddings(self, current_files):
         """Check if embeddings are up-to-date and update if needed"""
@@ -259,9 +213,49 @@ class FaceRecognitionSystem:
         except Exception as e:
             print(f"Error saving embeddings: {e}")
         
-    def update_attendance(self, name_key):
-        self.attendance_today.add(name_key)
+    def update_attendance(self, name_key, is_checkout=False):
+        if name_key not in self.attendance_today:
+            self.attendance_today[name_key] = {'checkin': False, 'checkout': False}
+        
+        if is_checkout:
+            self.attendance_today[name_key]['checkout'] = True
+        else:
+            self.attendance_today[name_key]['checkin'] = True
+            
         self.attendance_updated = True
+    
+    def get_attendance_status(self, name_key):
+        """Get attendance status for a person"""
+        if name_key not in self.attendance_today:
+            return "none"  # No attendance yet
+        
+        status = self.attendance_today[name_key]
+        if status['checkin'] and status['checkout']:
+            return "both"  # Both check-in and check-out done
+        elif status['checkin']:
+            return "checkin"  # Only check-in done
+        elif status['checkout']:
+            return "checkout"  # Only check-out done (unusual case)
+        else:
+            return "none"  # No attendance yet
+    
+    def can_perform_action(self, name_key):
+        """Determine what action can be performed for a person"""
+        current_time = time.time()
+        
+        # Check cooldown period
+        if name_key in self.last_recognition_time:
+            if current_time - self.last_recognition_time[name_key] < RECOGNITION_COOLDOWN:
+                return None  # Still in cooldown
+        
+        status = self.get_attendance_status(name_key)
+        
+        if status == "none":
+            return "checkin"  # Can do check-in
+        elif status == "checkin":
+            return "checkout"  # Can do check-out
+        else:
+            return None  # Already completed both or in unusual state
     
     def capture_thread(self):
         camera = cv2.VideoCapture(0)
@@ -342,7 +336,8 @@ class FaceRecognitionSystem:
                             'box': (x, y, w, h),
                             'name': "Unknown",
                             'accuracy': 0,
-                            'already_attended': False
+                            'status': "none",
+                            'next_action': None
                         }
                         
                         # Only queue for recognition if it's time
@@ -383,7 +378,8 @@ class FaceRecognitionSystem:
                                 if closest_match and closest_match['name'] != "Unknown":
                                     detections[i]['name'] = closest_match['name']
                                     detections[i]['accuracy'] = closest_match['accuracy']
-                                    detections[i]['already_attended'] = closest_match['already_attended']
+                                    detections[i]['status'] = closest_match['status']
+                                    detections[i]['next_action'] = closest_match['next_action']
                         
                         self.last_detections = detections
                     else:
@@ -468,7 +464,6 @@ class FaceRecognitionSystem:
                 
                 highest_accuracy = 0
                 best_match_name = None
-                is_already_attended = False
                 
                 # Compare with precomputed embeddings
                 for name_key, stored_embeddings in self.embeddings.items():
@@ -483,13 +478,15 @@ class FaceRecognitionSystem:
                         if current_accuracy > highest_accuracy:
                             highest_accuracy = current_accuracy
                             best_match_name = name_key
-                            # Check if this matched person already attended
-                            is_already_attended = (name_key in self.attendance_today)
                 
                 # If we found a match with good confidence
                 if highest_accuracy >= 75 and best_match_name:
                     x, y, w, h = face_info['box']
                     display_name = self.name_mapping[best_match_name]
+                    
+                    # Get current status and determine next action
+                    current_status = self.get_attendance_status(best_match_name)
+                    next_action = self.can_perform_action(best_match_name)
                     
                     # Update the face info in last_detections
                     for face in self.last_detections:
@@ -498,29 +495,45 @@ class FaceRecognitionSystem:
                         if abs(face_x - x) < 30 and abs(face_y - y) < 30:
                             face['name'] = display_name
                             face['accuracy'] = highest_accuracy
-                            face['already_attended'] = is_already_attended
+                            face['status'] = current_status
+                            face['next_action'] = next_action
                     
-                    # Only log attendance if person hasn't attended yet
-                    if not is_already_attended:
+                    # Only log attendance if an action can be performed
+                    if next_action:
+                        # Update last recognition time
+                        self.last_recognition_time[best_match_name] = time.time()
+                        
                         # Log attendance with clean frame (no overlays)
                         today = datetime.now().strftime("%Y-%m-%d")
                         log_dir = os.path.join(LOG_PATH, today)
                         os.makedirs(log_dir, exist_ok=True)
                         
-                        timestamp = datetime.now().strftime("%d-%m-%Y_%H%M%S")  # Changed timestamp format to day-month-year
-                        log_filename = f"{display_name}_{timestamp}.jpg"
+                        timestamp = datetime.now().strftime("%d-%m-%Y_%H%M%S")
+                        action_type = "masuk" if next_action == "checkin" else "keluar"
+                        log_filename = f"{display_name}_{action_type}_{timestamp}.jpg"
                         
                         # Save the clean attendance log
                         cv2.imwrite(os.path.join(log_dir, log_filename), clean_frame)
                         
-                        print(f"Attendance: {display_name} | Accuracy: {highest_accuracy:.1f}%")
-                        self.update_attendance(best_match_name)
+                        # Update attendance status
+                        is_checkout = (next_action == "checkout")
+                        self.update_attendance(best_match_name, is_checkout)
                         
-                        # Show success notification using the Tkinter main thread
-                        self.tk_root.after(0, lambda n=display_name: show_success_notification(n))
+                        print(f"Attendance {action_type}: {display_name} | Accuracy: {highest_accuracy:.1f}%")
+                        
+                        # Show appropriate notification using the Tkinter main thread
+                        if next_action == "checkin":
+                            self.tk_root.after(0, lambda n=display_name: show_checkin_notification(n, self.tk_root))
+                        else:
+                            self.tk_root.after(0, lambda n=display_name: show_checkout_notification(n, self.tk_root))
                         
                     else:
-                        print(f"Already attended: {display_name} | Accuracy: {highest_accuracy:.1f}%")
+                        if current_status == "both":
+                            print(f"{display_name} has already completed both check-in and check-out today")
+                        elif best_match_name in self.last_recognition_time:
+                            remaining_cooldown = RECOGNITION_COOLDOWN - (time.time() - self.last_recognition_time[best_match_name])
+                            if remaining_cooldown > 0:
+                                print(f"{display_name} in cooldown, wait {remaining_cooldown:.0f} seconds")
                 
             except queue.Empty:
                 pass
@@ -542,15 +555,32 @@ class FaceRecognitionSystem:
                 # Draw face detections with name and accuracy
                 for face in detections:
                     x, y, w, h = face['box']
-                    color = (0, 0, 255) if face['already_attended'] else (0, 255, 0)  # Red if attended, green if not
+                    
+                    # Determine color based on status and next action
+                    if face['status'] == "both":
+                        color = (128, 128, 128)  # Gray for completed
+                    elif face['next_action'] == "checkout":
+                        color = (0, 165, 255)  # Orange for checkout
+                    elif face['next_action'] == "checkin":
+                        color = (0, 255, 0)  # Green for checkin
+                    else:
+                        color = (0, 0, 255)  # Red for no action available
                     
                     # Draw rectangle around face
                     cv2.rectangle(display_frame, (x, y), (x+w, y+h), color, 2)
                     
-                    # Create label with name and accuracy
+                    # Create label with name, accuracy, and status
                     label = f"{face['name']}"
                     if face['accuracy'] > 0:
                         label += f" ({face['accuracy']:.1f}%)"
+                    
+                    # Add status information
+                    if face['status'] == "both":
+                        label += " [SELESAI]"
+                    elif face['status'] == "checkin":
+                        label += " [SUDAH MASUK]"
+                    elif face['status'] == "checkout":
+                        label += " [SUDAH KELUAR]"
                     
                     # Calculate label position and draw background
                     label_size, base_line = cv2.getTextSize(label, FONT, 0.5, 1)
